@@ -1,8 +1,8 @@
 # put in your tenant ID and name suffix of your AVD subscriptions
 $tenantId = ""
 $avdSubSuffix = ""
-$Site = ""
-$List = ""
+$PNPSite = ""
+$PNPList = ""
 
 import-module Az
 import-module pnp.powershell
@@ -119,13 +119,13 @@ try {
  
     # Connecting to Sharepoint List  
     write-verbose -Verbose -Message "# Connecting to Sharepoint List"
-    Connect-PnPOnline $Site -credentials $pnpCreds
-    write-verbose -message "Connecting to PNP $Site - List $List" -verbose
-    $List = Get-PnpList $List
+    Connect-PnPOnline $PNPSite -credentials $pnpCreds
+    write-verbose -message "Connecting to PNP $PNPSite - List $PNPList" -verbose
+    $PNPList = Get-PnpList $PNPList
   
     # Querying list items
     write-verbose -Verbose -Message "# Querying list items"
-    $items = Get-PnPListItem -List $List
+    $items = Get-PnPListItem -List $PNPList
   
     #Create a New Batch 
     $pnpBatch = New-PnPBatch
@@ -135,7 +135,7 @@ try {
     write-verbose -verbose -message 'Looping through items for orphaned objects'
     $items | foreach-object {
         if ($_.FieldValues.Title -notin $base_report.ResourceId) {
-            Remove-PnPListItem -Identity $($_.id | Select-Object -first 1) -List $List -Batch $pnpBatch
+            Remove-PnPListItem -Identity $($_.id | Select-Object -first 1) -List $PNPList -Batch $pnpBatch
             write-output "Delete entry for: $($_.FieldValues.Title)"
         }
     }
@@ -160,7 +160,7 @@ try {
         $hit = $items | where-object { $_.FieldValues.Title -eq $baseItem.ResourceId }
         if ($hit) {
             try {
-                set-pnplistitem -List $List -Identity $($hit.Id | Select-Object -first 1) -Values $params -batch $pnpBatch 
+                set-pnplistitem -List $PNPList -Identity $($hit.Id | Select-Object -first 1) -Values $params -batch $pnpBatch 
             }
             catch {
                 write-verbose -message ($_.Exception.message) -verbose
@@ -168,7 +168,7 @@ try {
             }
         }
         if ($baseItem.ResourceId -notin $items.FieldValues.Title) {
-            Add-PnPListItem -List $List -Values $params -batch $pnpBatch
+            Add-PnPListItem -List $PNPList -Values $params -batch $pnpBatch
         }
         $counter++
         if ($counter -ge 500) {
