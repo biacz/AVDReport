@@ -1,6 +1,11 @@
 # put in your tenant ID and name suffix of your AVD subscriptions
 $tenantId = ""
 $avdSubSuffix = ""
+$Site = ""
+$List = ""
+
+import-module Az
+import-module pnp.powershell
 
 function read-avddata {
     [CmdletBinding()]
@@ -84,4 +89,98 @@ function read-azvmdata {
         exit
     }
     return $AZVMs
+}
+
+try {
+    try {
+        # Reading AVD data
+        Write-Verbose -Verbose -Message "# Reading AVD data"
+        $AVDs = read-avddata -target sessionhosts
+    }
+    catch {
+        Write-Error ($_.Exception.message)
+        #Exit 2
+    }
+  
+    try {
+        # Creating base_report powershell object from data
+        Write-Verbose -Verbose -Message "# Creating base_report powershell object from data"
+        $base_report = $AVDs | select-object @{n = "VMName"; e = { $($_.ResourceId -split "/")[-1] } }, 
+        @{n = "HostPool"; e = { $($_.Name -split "/")[0] } }, 
+        @{n = "Subscription"; e = { $($_.ResourceId -split "/")[2] } },
+        @{n = "ResourceGroupName"; e = { $($_.ResourceId -split "/")[4] } }, 
+        @{n = "SessionHostName"; e = { $($_.Name -split "/")[1] } },
+        AssignedUser, AllowNewSession, OSVersion, AgentVersion, ResourceId
+    }
+    catch {
+        Write-Error ($_.Exception.message)
+        #Exit 3
+    }
+ 
+    # Connecting to Sharepoint List  
+    write-verbose -Verbose -Message "# Connecting to Sharepoint List"
+    Connect-PnPOnline $Site -credentials $pnpCreds
+    write-verbose -message "Connecting to PNP $Site - List $List" -verbose
+    $List = Get-PnpList $List
+  
+    # Querying list items
+    write-verbose -Verbose -Message "# Querying list items"
+    $items = Get-PnPListItem -List $List
+  
+    #Create a New Batch 
+    $pnpBatch = New-PnPBatch
+    $counter = 0
+  
+    # Looping through items for orphaned objects
+    write-verbose -verbose -message 'Looping through items for orphaned objects'
+    $items | foreach-object {
+        if ($_.FieldValues.Title -notin $base_report.ResourceId) {
+            Remove-PnPListItem -Identity $($_.id | Select-Object -first 1) -List $List -Batch $pnpBatch
+            write-output "Delete entry for: $($_.FieldValues.Title)"
+        }
+    }
+  
+    # Looping through base_report to update existing items and add new
+    write-verbose -verbose -message 'Looping through base_report to update existing items and add new'
+    $base_report | foreach-object {
+        $baseItem = $_
+        $params = @{
+            "Title"             = [string]$baseItem.ResourceId
+            "Subscription"      = [string]$baseItem.Subscription
+            "ResourceGroupName" = [string]$baseItem.ResourceGroupName
+            "VMName"            = [string]$baseItem.VMName
+            "SessionHostName"   = [string]$baseItem.SessionHostName
+            "AssignedUser"      = [string]$baseItem.AssignedUser
+            "HostPool"          = [string]$baseItem.HostPool
+            "AllowNewSession"   = [string]$baseItem.AllowNewSession
+            "OSVersion"         = [string]$baseItem.OSVersion
+            "AgentVersion"      = [string]$baseItem.AgentVersion
+        }
+      
+        $hit = $items | where-object { $_.FieldValues.Title -eq $baseItem.ResourceId }
+        if ($hit) {
+            try {
+                set-pnplistitem -List $List -Identity $($hit.Id | Select-Object -first 1) -Values $params -batch $pnpBatch 
+            }
+            catch {
+                write-verbose -message ($_.Exception.message) -verbose
+                #Exit 10
+            }
+        }
+        if ($baseItem.ResourceId -notin $items.FieldValues.Title) {
+            Add-PnPListItem -List $List -Values $params -batch $pnpBatch
+        }
+        $counter++
+        if ($counter -ge 500) {
+            # Send pnp batch to SPO
+            write-verbose -verbose -message 'Send pnp batch to SPO'
+            Invoke-PnPBatch -Batch $pnpBatch
+            $counter = 0
+        }
+    }
+    Invoke-PnPBatch -Batch $pnpBatch
+}
+catch {
+    Write-Error ($_.Exception.message)
+    #Exit 4
 }
